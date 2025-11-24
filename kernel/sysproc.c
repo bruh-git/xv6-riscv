@@ -6,6 +6,7 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "vm.h"
+#include "pstat.h"
 
 uint64
 sys_exit(void)
@@ -106,4 +107,43 @@ sys_uptime(void)
   xticks = ticks;
   release(&tickslock);
   return xticks;
+}
+
+// Implementação de settickets
+int
+sys_settickets(void)
+{
+  int number;
+  // Pega o argumento int da pilha
+  argint(0, &number);
+  
+  if(number < 1) // Validação: não pode ter menos de 1 ticket
+    return -1;
+    
+  // Define os tickets do processo atual
+  myproc()->tickets = number;
+  return 0;
+}
+
+// Implementação de getpinfo
+// Você precisará declarar a função externa que criamos em proc.c
+extern int fill_pstat(struct pstat *ps);
+
+int
+sys_getpinfo(void)
+{
+  uint64 st; // user pointer
+  struct pstat ps;
+
+  argaddr(0, &st);
+  if(st == 0)
+    return -1;
+
+  if(fill_pstat(&ps) < 0)
+    return -1;
+
+  if(copyout(myproc()->pagetable, st, (char *)&ps, sizeof(ps)) < 0)
+    return -1;
+
+  return 0;
 }

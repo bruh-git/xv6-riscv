@@ -27,6 +27,9 @@ char* sys_sbrk(int,int);
 int pause(int);
 int uptime(void);
 int getcnt(int);
+struct pstat; // Forward declaration
+int settickets(int);
+int getpinfo(struct pstat*);
 
 // ulib.c
 int stat(const char*, struct stat*);

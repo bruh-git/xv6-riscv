@@ -5,10 +5,20 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "pstat.h"
 
 struct cpu cpus[NCPU];
 
 struct proc proc[NPROC];
+
+// Implementação simples de Random (LCG) para o Kernel
+unsigned long rand_next = 1;
+
+int
+random(void) {
+    rand_next = rand_next * 1103515245 + 12345;
+    return (unsigned int)(rand_next / 65536) % 32768;
+}
 
 struct proc *initproc;
 
@@ -146,6 +156,8 @@ found:
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
 
+  p->tickets = 1; // Padrão é 1 bilhete
+  p->ticks = 0;
   return p;
 }
 
@@ -290,6 +302,9 @@ kfork(void)
 
   safestrcpy(np->name, p->name, sizeof(p->name));
 
+  np->tickets = p->tickets; // O filho (np) herda a mesma quantidade de tickets do pai (p)
+  np->ticks = 0;            // O filho começa com 0 rodadas contabilizadas
+
   pid = np->pid;
 
   release(&np->lock);
@@ -426,6 +441,9 @@ scheduler(void)
 {
   struct proc *p;
   struct cpu *c = mycpu();
+  long total_tickets;
+  long winner;
+  long counter;
 
   c->proc = 0;
   for(;;){
@@ -437,27 +455,45 @@ scheduler(void)
     intr_on();
     intr_off();
 
-    int found = 0;
+    total_tickets = 0;
     for(p = proc; p < &proc[NPROC]; p++) {
       acquire(&p->lock);
       if(p->state == RUNNABLE) {
-        // Switch to chosen process.  It is the process's job
-        // to release its lock and then reacquire it
-        // before jumping back to us.
-        p->state = RUNNING;
-        c->proc = p;
-        swtch(&c->context, &p->context);
-
-        // Process is done running for now.
-        // It should have changed its p->state before coming back.
-        c->proc = 0;
-        found = 1;
+        total_tickets += p->tickets;
       }
       release(&p->lock);
     }
-    if(found == 0) {
-      // nothing to run; stop running on this core until an interrupt.
+    // Se ninguém tem tickets (ninguém quer rodar), economiza CPU
+    if(total_tickets == 0) {
       asm volatile("wfi");
+      continue;
+    }
+    //sorteia o vencedor
+    winner = random() % total_tickets;
+
+    counter = 0;
+    for(p = proc; p < &proc[NPROC]; p++) {
+      acquire(&p->lock);
+      if(p->state == RUNNABLE) {
+          counter += p->tickets;
+
+          if(counter > winner) {
+            p->state = RUNNING;
+            c->proc = p;
+
+            // Contabiliza que ele rodou (para o gráfico depois)
+            p->ticks++;
+
+            swtch(&c->context, &p->context);
+
+            // Process is done running for now.
+            // It should have changed its p->state before coming back.
+            c->proc = 0;
+            release(&p->lock);
+            break; // Sai do loop para fazer um novo sorteio
+        }
+    } 
+    release(&p->lock);
     }
   }
 }
@@ -687,4 +723,25 @@ procdump(void)
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
   }
+}
+
+int
+fill_pstat(struct pstat *ps)
+{
+  struct proc *p;
+
+  for(int i = 0; i < NPROC; i++){
+    p = &proc[i];
+    acquire(&p->lock); // Trava o processo para ler dados consistentes
+    if(p->state != UNUSED){
+      ps->inuse[i] = 1;
+      ps->pid[i] = p->pid;
+      ps->tickets[i] = p->tickets;
+      ps->ticks[i] = p->ticks;
+    } else {
+      ps->inuse[i] = 0;
+    }
+    release(&p->lock);
+  }
+  return 0;
 }
